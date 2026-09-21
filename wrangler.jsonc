@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gg-clone",
+  "compatibility_date": "2026-09-21",
+
+  // Assets-only Worker: there is no `main`, so every request is served from
+  // the Vite build. This also stops `wrangler deploy` trying to auto-configure
+  // a framework integration, which requires Vite 6+.
+  "assets": {
+    "directory": "./dist",
+    // SPA fallback — unmatched paths serve index.html so deep links work.
+    "not_found_handling": "single-page-application"
+  }
+}

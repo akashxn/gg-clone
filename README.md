@@ -34,22 +34,46 @@ npm run dev        # http://localhost:5173
 Other scripts: `npm run build` (typecheck + production bundle into `dist/`),
 `npm run preview`, `npm run typecheck`.
 
-## Deploying to Cloudflare Pages
+## Deploying to Cloudflare
 
-Connect this repo under **Workers & Pages → Create → Pages → Connect to Git**,
-then:
+This deploys as a **Worker with static assets** — Cloudflare's current default
+when you connect a Git repo, and what the dashboard sets up as
+`Worker Name: gg-clone` with a deploy command of `npx wrangler deploy`.
 
-| Setting | Value |
-| --- | --- |
-| Build command | `npm run build` |
-| Output directory | `dist` |
-| Production branch | `main` |
+`wrangler.jsonc` is committed and does the work:
 
-`public/_redirects` is already present so client-side routing falls back to
-`index.html`. `.node-version` pins Node 22, since Cloudflare's default is older.
+```jsonc
+{
+  "name": "gg-clone",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
+```
 
-There is nothing to configure server-side — the app is fully static and the
-Street View key lives in each player's browser, not in the build.
+There is no `main`, so every request is served from the build — no Worker
+script runs. Two things this deliberately avoids:
+
+- **No framework auto-detection.** Without a config, `wrangler deploy` tries to
+  auto-configure a Vite integration and fails on Vite 5 with *"cannot be
+  automatically configured, please update to at least 6.0.0"*. An explicit
+  config skips that path entirely, so Vite 5 is fine.
+- **No `_redirects` file.** That is a Pages mechanism; its `/* /index.html 200`
+  rewrite is ignored by Workers Assets. `not_found_handling` is the Workers
+  equivalent and is what makes deep links work here.
+
+Wrangler is pinned as a devDependency so CI and local runs agree.
+
+Build settings in the dashboard: build command `npm run build`, output
+directory `dist`, production branch `main`. `.node-version` pins Node 22.
+
+### If you would rather use Pages
+
+Create a Pages project instead of a Workers one, drop the deploy command, and
+re-add `public/_redirects` containing `/*  /index.html  200`. Pages ignores
+`wrangler.jsonc` for static builds. Workers with static assets is Cloudflare's
+recommended path for new projects, so that is what is set up here.
 
 ## How it works
 
@@ -61,6 +85,7 @@ Street View key lives in each player's browser, not in the build.
 | `src/game/streetview.ts` | Maps API loading, key storage, panorama lookup |
 | `src/components/Game.tsx` | Round loop: find pano → guess → reveal → next |
 | `src/components/GuessMap.tsx` | Leaflet guess map (OpenStreetMap tiles, no key) |
+| `wrangler.jsonc` | Cloudflare Workers static-asset config |
 
 ### Scoring
 
