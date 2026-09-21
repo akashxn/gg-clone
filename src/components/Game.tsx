@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import GuessMap from './GuessMap';
-import Panorama from './Panorama';
-import KeySetup from './KeySetup';
-import { formatDistance, haversineKm, mapSizeKm, scoreForGuess } from '../game/geo';
+import Panorama, { type PannellumViewer } from './Panorama';
+import { angleDelta, bearing, formatDistance, haversineKm, mapSizeKm, scoreForGuess } from '../game/geo';
 import { ROUNDS_PER_GAME, describeFilter, pickRounds, poolFor } from '../game/rounds';
-import { findPanorama, keyWasRejected, loadKey, loadMapsApi, saveKey } from '../game/streetview';
-import type { Filter, LatLng, Location, RoundResult } from '../types';
+import { fetchNeighbors, type Neighbor } from '../game/panoramax';
+import type { Filter, LatLng, RoundResult } from '../types';
 
 interface Props {
   filter: Filter;
@@ -13,151 +12,140 @@ interface Props {
   onQuit: () => void;
 }
 
-type Status = 'need-key' | 'booting' | 'finding' | 'ready' | 'revealed' | 'error';
+/** Where the player currently stands — the drop point, or a step along it. */
+interface Standpoint extends LatLng {
+  url: string;
+  azimuth: number | null;
+}
+
+/** How far off your facing a panorama may be and still count as "forward". */
+const FORWARD_ARC = 75;
 
 export default function Game({ filter, onFinish, onQuit }: Props) {
   const pool = useMemo(() => poolFor(filter), [filter]);
   const size = useMemo(() => mapSizeKm(pool), [pool]);
+  const queue = useMemo(() => pickRounds(pool), [pool]);
 
-  const [key, setKey] = useState(loadKey);
-  const [status, setStatus] = useState<Status>(key ? 'booting' : 'need-key');
-  const [error, setError] = useState<string | null>(null);
-  const [rejected, setRejected] = useState(false);
-
-  const [queue, setQueue] = useState<Location[]>(() => pickRounds(pool));
   const [roundIndex, setRoundIndex] = useState(0);
-  const [location, setLocation] = useState<Location | null>(null);
-  const [panoId, setPanoId] = useState<string | null>(null);
+  const location = queue[roundIndex];
+
+  const [here, setHere] = useState<Standpoint | null>(null);
+  const [neighbors, setNeighbors] = useState<Neighbor[]>([]);
+  const [visited, setVisited] = useState<string[]>([]);
+  const [imageReady, setImageReady] = useState(false);
 
   const [guess, setGuess] = useState<LatLng | null>(null);
   const [results, setResults] = useState<RoundResult[]>([]);
+  const [revealed, setRevealed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
 
-  // Locations already tried, so a coverage gap never re-serves the same dud.
-  const usedIds = useRef(new Set<number>());
+  const viewerRef = useRef<PannellumViewer | null>(null);
   const totalScore = results.reduce((sum, r) => sum + r.score, 0);
 
-  // --- boot the Maps API -------------------------------------------------
+  // --- start of a round: stand on the drop point ------------------------
   useEffect(() => {
-    if (!key || status !== 'booting') return;
-    let cancelled = false;
+    if (!location) return;
+    setHere({ url: location.url, lat: location.lat, lng: location.lng, azimuth: null });
+    setVisited([location.url]);
+    setNeighbors([]);
+    setGuess(null);
+    setRevealed(false);
+    setExpanded(false);
+    setImageReady(false);
+  }, [location]);
 
-    loadMapsApi(key)
-      .then(() => {
-        // gm_authFailure fires slightly after load, so give it a beat.
-        setTimeout(() => {
-          if (cancelled) return;
-          if (keyWasRejected()) {
-            setRejected(true);
-            setStatus('need-key');
-          } else {
-            setStatus('finding');
-          }
-        }, 400);
-      })
-      .catch((e: Error) => {
-        if (cancelled) return;
-        setError(e.message);
-        setStatus('error');
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [key, status]);
-
-  // --- resolve a panorama for the current round --------------------------
-  // Keyed on `status` so every transition into 'finding' resolves exactly one
-  // round; the terminal setStatus below stops it re-running.
+  // --- what can we walk to from here? -----------------------------------
   useEffect(() => {
-    if (status !== 'finding') return;
-    let cancelled = false;
+    if (!here || revealed) return;
+    const ac = new AbortController();
 
-    (async () => {
-      setGuess(null);
-      setPanoId(null);
+    fetchNeighbors({ lat: here.lat, lng: here.lng }, 170, ac.signal).then((found) => {
+      if (ac.signal.aborted) return;
+      setNeighbors(found);
 
-      // Try the queued location first, then any unused fallback from the pool,
-      // so a coverage gap costs a moment rather than the whole round.
-      const queued = queue[roundIndex];
-      const fallbacks = pool.filter((l) => !usedIds.current.has(l.id));
-      const candidates = [queued, ...fallbacks].filter(Boolean) as Location[];
-
-      for (const candidate of candidates.slice(0, 8)) {
-        usedIds.current.add(candidate.id);
-        const found = await findPanorama(candidate);
-        if (cancelled) return;
-
-        if (found) {
-          setLocation(candidate);
-          setPanoId(found.panoId);
-          setStatus('ready');
-          return;
+      // The response usually contains the picture we are standing on, which
+      // is the only place its camera heading is available to us.
+      if (here.azimuth === null) {
+        const self = found.find((n) => n.url === here.url);
+        if (self?.azimuth !== null && self?.azimuth !== undefined) {
+          setHere((cur) => (cur && cur.url === here.url ? { ...cur, azimuth: self.azimuth } : cur));
         }
       }
+    });
 
-      setError('No Street View coverage could be found for this map. Try a wider region.');
-      setStatus('error');
-    })();
+    return () => ac.abort();
+  }, [here, revealed]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [status, roundIndex, pool, queue]);
+  /**
+   * Step to another panorama. Prefers one roughly ahead of where the player is
+   * looking; falls back to the nearest unvisited one, so movement still works
+   * when an instance publishes no camera heading.
+   */
+  const move = () => {
+    if (!here) return;
 
-  // --- actions -----------------------------------------------------------
+    const candidates = neighbors
+      .filter((n) => !visited.includes(n.url))
+      .map((n) => ({
+        n,
+        distanceKm: haversineKm(here, n),
+        bearingTo: bearing(here, n),
+      }))
+      .filter((c) => c.distanceKm > 0)
+      .sort((a, b) => a.distanceKm - b.distanceKm);
+
+    if (candidates.length === 0) return;
+
+    let pick = candidates[0];
+    if (here.azimuth !== null && viewerRef.current) {
+      const facing = (here.azimuth + viewerRef.current.getYaw() + 360) % 360;
+      const ahead = candidates.find((c) => Math.abs(angleDelta(facing, c.bearingTo)) <= FORWARD_ARC);
+      if (ahead) pick = ahead;
+    }
+
+    setImageReady(false);
+    setVisited((v) => [...v, pick.n.url]);
+    setHere({ url: pick.n.url, lat: pick.n.lat, lng: pick.n.lng, azimuth: pick.n.azimuth });
+  };
+
+  const returnToStart = () => {
+    if (!location) return;
+    setImageReady(false);
+    setHere({ url: location.url, lat: location.lat, lng: location.lng, azimuth: null });
+  };
+
+  // --- guessing ----------------------------------------------------------
   const submitGuess = () => {
-    if (!guess || !location || status !== 'ready') return;
+    if (!guess || !location || revealed) return;
     const distanceKm = haversineKm(guess, { lat: location.lat, lng: location.lng });
     setResults((rs) => [...rs, { location, guess, distanceKm, score: scoreForGuess(distanceKm, size) }]);
     setExpanded(true);
-    setStatus('revealed');
+    setRevealed(true);
   };
 
   const skipRound = () => {
-    if (!location) return;
+    if (!location || revealed) return;
     setResults((rs) => [...rs, { location, guess: null, distanceKm: null, score: 0 }]);
     setExpanded(true);
-    setStatus('revealed');
+    setRevealed(true);
   };
 
   const nextRound = () => {
-    setExpanded(false);
     if (roundIndex + 1 >= ROUNDS_PER_GAME) {
       onFinish(results);
       return;
     }
     setRoundIndex((i) => i + 1);
-    setStatus('finding');
   };
 
-  // --- gates -------------------------------------------------------------
-  if (status === 'need-key') {
-    return (
-      <KeySetup
-        rejected={rejected}
-        onBack={onQuit}
-        onSaved={(k) => {
-          saveKey(k);
-          setKey(k);
-          setRejected(false);
-          setQueue(pickRounds(pool));
-          usedIds.current.clear();
-          // A rejected key already loaded the script; a reload picks up the new one.
-          window.location.reload();
-        }}
-      />
-    );
-  }
-
-  if (status === 'error') {
+  if (!location) {
     return (
       <div className="screen screen--center">
         <div className="panel panel--narrow">
           <div className="panel__icon" aria-hidden="true">⚠️</div>
-          <h2>Something went wrong</h2>
-          <p className="muted">{error}</p>
+          <h2>No panoramas in this map</h2>
+          <p className="muted">Pick a wider region and try again.</p>
           <button className="btn btn--primary" onClick={onQuit}>Back to menu</button>
         </div>
       </div>
@@ -165,8 +153,9 @@ export default function Game({ filter, onFinish, onQuit }: Props) {
   }
 
   const last = results[results.length - 1];
-  const revealed = status === 'revealed';
   const isFinalRound = roundIndex + 1 >= ROUNDS_PER_GAME;
+  const canMove = !revealed && neighbors.some((n) => !visited.includes(n.url));
+  const stepsTaken = visited.length - 1;
 
   return (
     <div className="game">
@@ -184,20 +173,35 @@ export default function Game({ filter, onFinish, onQuit }: Props) {
           <span className="hud__label">Score</span>
           <span className="hud__value">{totalScore.toLocaleString()}</span>
         </div>
-        {status === 'ready' && (
-          <button className="hud__reset" onClick={() => setResetSignal((n) => n + 1)}>
-            Reset view
-          </button>
+        {!revealed && (
+          <div className="hud__tools">
+            <button className="hud__btn" onClick={() => setResetSignal((n) => n + 1)}>
+              Reset view
+            </button>
+            <button className="hud__btn" onClick={move} disabled={!canMove} title="Walk to a nearby panorama">
+              Move ↑
+            </button>
+            <button className="hud__btn" onClick={returnToStart} disabled={stepsTaken === 0}>
+              Back to drop
+            </button>
+          </div>
         )}
       </header>
 
       <div className="stage">
-        {panoId ? (
-          <Panorama panoId={panoId} resetSignal={resetSignal} />
-        ) : (
-          <div className="loading">
+        {here && (
+          <Panorama
+            key={here.url}
+            url={here.url}
+            resetSignal={resetSignal}
+            onReady={(v) => { viewerRef.current = v; }}
+            onLoad={() => setImageReady(true)}
+          />
+        )}
+        {!imageReady && (
+          <div className="loading loading--overlay">
             <div className="spinner" aria-hidden="true" />
-            <p>Finding a spot…</p>
+            <p>Loading panorama…</p>
           </div>
         )}
       </div>
@@ -217,14 +221,10 @@ export default function Game({ filter, onFinish, onQuit }: Props) {
 
         {!revealed && (
           <div className="mapdock__actions">
-            <button
-              className="btn btn--primary btn--block"
-              disabled={!guess || status !== 'ready'}
-              onClick={submitGuess}
-            >
+            <button className="btn btn--primary btn--block" disabled={!guess} onClick={submitGuess}>
               {guess ? 'Make guess' : 'Click the map to place your pin'}
             </button>
-            <button className="btn btn--ghost btn--block" onClick={skipRound} disabled={status !== 'ready'}>
+            <button className="btn btn--ghost btn--block" onClick={skipRound}>
               Skip round
             </button>
           </div>

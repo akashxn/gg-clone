@@ -105,6 +105,8 @@ a { color: var(--accent); }
 }
 .btn--primary:hover:not(:disabled) { background: #ffd469; }
 .btn--ghost { background: transparent; }
+/* "Click the map to place your pin" is a prompt, not a dead action. */
+.btn--primary:disabled { background: var(--bg-elev-2); color: var(--muted); border-color: var(--border); opacity: 1; }
 .btn--block { display: block; width: 100%; }
 
 /* -------------------------------------------------------------------- home */
@@ -256,18 +258,31 @@ a { color: var(--accent); }
   color: var(--muted);
 }
 .hud__value { font-weight: 650; font-variant-numeric: tabular-nums; }
-.hud__reset {
-  margin-left: auto;
-  background: rgba(22, 27, 35, 0.9);
+.hud__tools { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.hud__btn {
+  background: rgba(22, 27, 35, 0.92);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
   padding: 7px 12px;
   font-size: 0.85rem;
+  transition: background 0.15s, opacity 0.15s;
 }
+.hud__btn:hover:not(:disabled) { background: #263040; }
+.hud__btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .stage { position: absolute; inset: 0; }
 .panorama { width: 100%; height: 100%; background: #000; }
+
+/* Sits over the viewer while a panorama decodes. Must not swallow clicks:
+   if an image fails outright the player can still guess or skip. */
+.loading--overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(14, 17, 22, 0.82);
+  pointer-events: none;
+  z-index: 5;
+}
 
 .loading {
   display: grid;
@@ -405,3 +420,21 @@ a { color: var(--accent); }
   .reveal { width: calc(100% - 20px); bottom: 10px; }
   .hud { gap: 12px; }
 }
+
+/* ---------------------------------------------------------------- pannellum */
+.pnlm-container { background: #000 !important; }
+.pnlm-load-box, .pnlm-load-button { display: none !important; }
+/* Pannellum parks these top-left, straight under our HUD. */
+.pnlm-zoom-controls {
+  top: auto !important;
+  bottom: 16px !important;
+  left: 14px !important;
+  right: auto !important;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.pnlm-ctrl {
+  background-color: rgba(22, 27, 35, 0.92) !important;
+  border: 1px solid var(--border) !important;
+}
+.pnlm-ctrl:hover { background-color: #263040 !important; }

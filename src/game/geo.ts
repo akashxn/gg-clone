@@ -51,6 +51,23 @@ export function mapSizeKm(pool: Location[]): number {
   return Math.max(diagonal, 50);
 }
 
+/** Initial bearing from `a` to `b`, in degrees clockwise from north. */
+export function bearing(a: LatLng, b: LatLng): number {
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const dLng = toRad(b.lng - a.lng);
+
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+
+  return (Math.atan2(y, x) * 180) / Math.PI;
+}
+
+/** Smallest signed difference between two bearings, in [-180, 180]. */
+export function angleDelta(a: number, b: number): number {
+  return ((((b - a) % 360) + 540) % 360) - 180;
+}
+
 /** Human-readable distance — metres under 1km, then sensible precision. */
 export function formatDistance(km: number): string {
   if (km < 1) return `${Math.round(km * 1000)} m`;

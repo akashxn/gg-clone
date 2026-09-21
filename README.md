@@ -1,28 +1,60 @@
 # GG Clone
 
-A GeoGuessr-style geography game. You're dropped into a Street View panorama
-somewhere on Earth, you pan around looking for clues, and you drop a pin on a
-world map. Ten rounds, scored by how close you got.
+A GeoGuessr-style geography game. You're dropped into a 360° street-level
+panorama somewhere on Earth, you look around and walk down the street for
+clues, then drop a pin on a world map. Ten rounds, scored by distance.
+
+**No API keys. No accounts. No billing. Nothing to sign up for.**
+Open the page and play.
 
 Single player only — multiplayer is a deliberate placeholder.
 
-## Requirements: a Google Maps API key
+## Where the imagery comes from
 
-The panoramas come from Google Street View, and Google serves no panorama
-imagery without an API key. There is no keyless workaround: the app asks for a
-key on first run and stores it in the browser's `localStorage`. **No key is
-committed to this repository.**
+[Panoramax](https://panoramax.xyz) — an open, federated commons of
+street-level imagery run by IGN and the OpenStreetMap community. The API needs
+no key and no account, and the pictures are openly licensed.
 
-To get one (a few minutes, free tier is generous):
+This matters because Google Street View, the obvious choice, serves nothing
+without an API key tied to a billing account. Panoramax has no such gate.
 
-1. Create an API key at the
-   [Google Maps Platform credentials page](https://console.cloud.google.com/google/maps-apis/credentials).
-2. On the same project, enable **Maps JavaScript API** and **Street View Static API**.
-3. Launch the app and paste the key when prompted.
+Only equirectangular pictures (`field_of_view=360`) are used, so every round is
+a real look-around rather than a flat snapshot.
 
-Before deploying anywhere public, **restrict the key to your own domain** in the
-Google console. An unrestricted key embedded in a public site can be used by
-anyone and billed to you.
+The guess map is [Leaflet](https://leafletjs.com) with OpenStreetMap tiles —
+also keyless.
+
+### Coverage, honestly
+
+**2,039 panoramas · 85 cities · 41 countries · all 6 continents.**
+
+Panoramax is contributor-driven, so coverage is uneven in a way Google's is not:
+
+| Continent | Panoramas | Notes |
+| --- | --- | --- |
+| Europe | 1,239 | Dense — France, Germany, Belgium, Netherlands, Switzerland |
+| Asia | 238 | Mostly Japan and Taiwan |
+| North America | 233 | US and Canada |
+| South America | 209 | Argentina and Brazil |
+| Oceania | 91 | New Zealand, New Caledonia, French Polynesia |
+| Africa | 29 | **Réunion only** — the real weak spot |
+
+So a World game leans European, and Africa is barely represented. That is the
+honest price of using free open imagery instead of a paid API. Continent and
+country filters let you play a region deliberately.
+
+Countries with fewer than five panoramas are hidden from the country picker —
+a ten-round game of the same two images is not a game — but they still appear
+in World and continent games.
+
+To refresh or expand the pool as contributors add imagery:
+
+```bash
+python3 scripts/build-dataset.py     # rewrites src/data/panoramas.json
+```
+
+Add entries to `scripts/cities.json` to probe new places; cities with no 360
+coverage drop out on their own.
 
 ## Running locally
 
@@ -31,100 +63,86 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Other scripts: `npm run build` (typecheck + production bundle into `dist/`),
-`npm run preview`, `npm run typecheck`.
+Other scripts: `npm run build`, `npm run preview`, `npm run typecheck`.
 
 ## Deploying to Cloudflare
 
-This deploys as a **Worker with static assets** — Cloudflare's current default
-when you connect a Git repo, and what the dashboard sets up as
-`Worker Name: gg-clone` with a deploy command of `npx wrangler deploy`.
-
-`wrangler.jsonc` is committed and does the work:
+Deploys as a **Worker with static assets** — Cloudflare's default when you
+connect a Git repo. `wrangler.jsonc` is committed:
 
 ```jsonc
 {
   "name": "gg-clone",
-  "assets": {
-    "directory": "./dist",
-    "not_found_handling": "single-page-application"
-  }
+  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" }
 }
 ```
 
-There is no `main`, so every request is served from the build — no Worker
-script runs. Two things this deliberately avoids:
+No `main`, so nothing runs server-side. The explicit config also stops
+`wrangler deploy` from trying to auto-configure a Vite integration, which
+requires Vite 6+ and fails on this project's Vite 5.
 
-- **No framework auto-detection.** Without a config, `wrangler deploy` tries to
-  auto-configure a Vite integration and fails on Vite 5 with *"cannot be
-  automatically configured, please update to at least 6.0.0"*. An explicit
-  config skips that path entirely, so Vite 5 is fine.
-- **No `_redirects` file.** That is a Pages mechanism; its `/* /index.html 200`
-  rewrite is ignored by Workers Assets. `not_found_handling` is the Workers
-  equivalent and is what makes deep links work here.
+Dashboard settings: build command `npm run build`, output directory `dist`,
+production branch `main`. `.node-version` pins Node 22.
 
-Wrangler is pinned as a devDependency so CI and local runs agree.
-
-Build settings in the dashboard: build command `npm run build`, output
-directory `dist`, production branch `main`. `.node-version` pins Node 22.
-
-### If you would rather use Pages
-
-Create a Pages project instead of a Workers one, drop the deploy command, and
-re-add `public/_redirects` containing `/*  /index.html  200`. Pages ignores
-`wrangler.jsonc` for static builds. Workers with static assets is Cloudflare's
-recommended path for new projects, so that is what is set up here.
+If you would rather use Pages: create a Pages project, drop the deploy command,
+and add `public/_redirects` containing `/*  /index.html  200`.
 
 ## How it works
 
 | Path | Role |
 | --- | --- |
-| `src/data/locations.ts` | 265 curated locations with country + continent |
-| `src/game/geo.ts` | Haversine distance, scoring curve, map sizing |
+| `scripts/build-dataset.py` | Queries Panoramax, thins results, writes the pool |
+| `src/data/panoramas.json` | 2,039 panoramas in a compact lookup-table form |
+| `src/data/locations.ts` | Expands that into the playable pool |
+| `src/game/geo.ts` | Haversine, bearing, scoring curve, map sizing |
 | `src/game/rounds.ts` | Filtering and round selection |
-| `src/game/streetview.ts` | Maps API loading, key storage, panorama lookup |
-| `src/components/Game.tsx` | Round loop: find pano → guess → reveal → next |
-| `src/components/GuessMap.tsx` | Leaflet guess map (OpenStreetMap tiles, no key) |
-| `wrangler.jsonc` | Cloudflare Workers static-asset config |
+| `src/game/panoramax.ts` | Neighbour lookup for walking down the street |
+| `src/components/Panorama.tsx` | Pannellum WebGL 360 viewer |
+| `src/components/GuessMap.tsx` | Leaflet guess map |
+| `src/components/Game.tsx` | Round loop: drop → look → walk → guess → reveal |
 
 ### Scoring
 
 GeoGuessr's published curve:
 
 ```
-score = 5000 * e^(-10 * distance / mapSize)
+score = 5000 · e^(−10 · distance / mapSize)
 ```
 
-`mapSize` is the diagonal of the bounding box of whatever pool you selected, so
-a miss is graded against the size of the area in play — being 300 km off is
-near-perfect on the World map and terrible on a single-country map. Ten rounds
-gives a 50,000 maximum.
+`mapSize` is the diagonal of the bounding box of the pool you picked, so a miss
+is graded against the area in play — 300 km off is near-perfect on World and
+terrible inside one country. Ten rounds, 50,000 maximum.
 
-### Location data
+### Movement
 
-The dataset is deliberately biased toward countries with official Street View
-coverage. Countries Google doesn't cover (Morocco, China, most of Central Asia)
-are omitted rather than left to fail at runtime. When a curated point still has
-no panorama nearby, `Game.tsx` widens the search radius to 20 km and then falls
-through to other unused locations in the pool, so a coverage gap costs a moment
-rather than the round.
+`Move ↑` steps to a nearby panorama. Panoramax returns each picture's camera
+heading (`view:azimuth`), which is combined with the viewer's yaw to work out
+which way you are actually facing, so you walk the direction you are looking.
+When an instance publishes no heading, it falls back to the nearest unvisited
+panorama. `Back to drop` returns you to the start.
+
+Your guess is always scored against the **drop point**, not wherever you
+wandered to — same as GeoGuessr.
 
 ## Known limitations
 
-These are MVP boundaries, not bugs:
-
 - **Multiplayer is a stub.** It renders a "not built yet" screen.
-- **No persistence.** Scores are not stored; there are no accounts or leaderboards.
-- **No timer.** Rounds are untimed.
-- **Fixed round count.** Ten rounds, not configurable in the UI.
-- **Curated locations, not random sampling.** Real GeoGuessr samples road
-  networks, so it can drop you on an anonymous rural road. This drops you near
-  one of 265 known places, which makes for easier, more city-heavy rounds.
-- **OpenStreetMap tiles** are used directly. Fine at this traffic level; a busy
-  deployment should move to a proper tile provider per the
+- **Africa is essentially unrepresented** (Réunion only), and World games skew
+  European. A limitation of the free imagery, not of the code.
+- **No persistence** — no accounts, scores, or leaderboards.
+- **No round timer.** Rounds are untimed.
+- **Fixed at 10 rounds**, not configurable in the UI.
+- **Movement is approximate.** It hops between nearby pictures rather than
+  following a road graph, so it can dead-end where coverage is sparse.
+- **OpenStreetMap tiles** are used directly, which is fine at this traffic
+  level; a busy deployment should move to a dedicated tile provider per the
   [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
 
 ## Attribution
 
-Map tiles © OpenStreetMap contributors. Panorama imagery © Google. This is an
-independent educational project and is not affiliated with GeoGuessr AB.
+Street-level imagery from [Panoramax](https://panoramax.xyz) contributors,
+under the licence each picture carries (largely CC-BY-SA and etalab-2.0).
+Map tiles © OpenStreetMap contributors. 360 rendering by
+[Pannellum](https://pannellum.org) (MIT).
+
+An independent educational project, not affiliated with GeoGuessr AB.

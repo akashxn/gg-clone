@@ -6,8 +6,12 @@ export type Continent =
   | 'Oceania'
   | 'South America';
 
+/** One playable drop point: an equirectangular panorama and where it was shot. */
 export interface Location {
   id: number;
+  /** Direct image URL on whichever Panoramax instance hosts it. */
+  url: string;
+  /** Nearest named place — used for the reveal, not shown during play. */
   name: string;
   country: string;
   continent: Continent;
@@ -20,16 +24,14 @@ export interface LatLng {
   lng: number;
 }
 
-/** What the player picked on the setup screen. */
 export type Filter =
   | { kind: 'world' }
   | { kind: 'continent'; continent: Continent }
   | { kind: 'country'; country: string };
 
-/** A finished round: where it was, where they clicked, what it cost them. */
 export interface RoundResult {
   location: Location;
-  /** null when the round was skipped or timed out without a guess. */
+  /** null when the round was skipped. */
   guess: LatLng | null;
   distanceKm: number | null;
   score: number;

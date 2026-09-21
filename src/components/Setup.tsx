@@ -39,8 +39,8 @@ export default function Setup({ onStart, onBack }: Props) {
 
         <h2 className="panel__title">Choose your map</h2>
         <p className="muted">
-          {ROUNDS_PER_GAME} rounds. Narrower maps score harder — distances are graded against the
-          size of the area you pick.
+          {ROUNDS_PER_GAME} rounds of open street-level imagery. Narrower maps score harder —
+          distances are graded against the size of the area you pick.
         </p>
 
         <div className="tabs" role="tablist">
@@ -60,7 +60,7 @@ export default function Setup({ onStart, onBack }: Props) {
         <div className="tabpanel">
           {tab === 'world' && (
             <p className="tabpanel__blurb">
-              Anywhere on Earth — all {poolFor({ kind: 'world' }).length} locations in play.
+              Anywhere with open coverage — all {poolFor({ kind: 'world' }).length} panoramas in play.
             </p>
           )}
 
@@ -108,7 +108,7 @@ export default function Setup({ onStart, onBack }: Props) {
 
         <div className="panel__footer">
           <span className="muted">
-            {poolSize} location{poolSize === 1 ? '' : 's'} in this pool
+            {poolSize} panorama{poolSize === 1 ? '' : 's'} in this pool
             {poolSize > 0 && poolSize < ROUNDS_PER_GAME ? ' — some will repeat' : ''}
           </span>
           <button
